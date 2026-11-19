@@ -1,0 +1,54 @@
+# Manifest cho Bench Console (https://github.com/Tamle25/hil-bench-lct).
+#
+# harbor_sql/ và harbor_swe/ mỗi thư mục có 100 task × 3 chế độ, tên dạng hil-bench-<loại>_<i>-<chế độ>:
+#   baseline   đề có blocker, không có cách hỏi
+#   full_info  đề kèm sẵn lời giải các blocker
+#   ask_human  đề có blocker + công cụ MCP ask_human để hỏi lại
+# Mỗi chế độ là một bộ bench riêng (lọc bằng mẫu glob trong exclude) để điểm so được với nhau.
+#
+# Chế độ ask_human cần biến môi trường cho "người" giả lập (đặt ở máy chạy backend):
+#   ASK_HUMAN_BACKEND (litellm_proxy | provider_native | vllm), ASK_HUMAN_MODEL và khoá tương ứng
+#   (litellm_proxy cần LITELLM_BASE_URL, LITELLM_API_KEY, LITELLM_USER; provider_native cần OPENAI_API_KEY…).
+version: 1
+benches:
+  - id: hil-sql-baseline
+    name: "HiL-Bench SQL · baseline"
+    task: "Viết truy vấn SQL; đề có blocker, agent không được hỏi"
+    data: harbor_sql
+    exclude: ["*-ask_human", "*-full_info"]
+    scoring: {type: harbor}
+
+  - id: hil-sql-full-info
+    name: "HiL-Bench SQL · full info"
+    task: "Viết truy vấn SQL; đề kèm sẵn lời giải blocker (trần trên)"
+    data: harbor_sql
+    exclude: ["*-ask_human", "*-baseline"]
+    scoring: {type: harbor}
+
+  - id: hil-sql-ask-human
+    name: "HiL-Bench SQL · ask human"
+    task: "Viết truy vấn SQL; agent có công cụ ask_human để hỏi về blocker"
+    data: harbor_sql
+    exclude: ["*-baseline", "*-full_info"]
+    scoring: {type: harbor}
+
+  - id: hil-swe-baseline
+    name: "HiL-Bench SWE · baseline"
+    task: "Sửa repo phần mềm; đề có blocker, agent không được hỏi"
+    data: harbor_swe
+    exclude: ["*-ask_human", "*-full_info"]
+    scoring: {type: harbor}
+
+  - id: hil-swe-full-info
+    name: "HiL-Bench SWE · full info"
+    task: "Sửa repo phần mềm; đề kèm sẵn lời giải blocker (trần trên)"
+    data: harbor_swe
+    exclude: ["*-ask_human", "*-baseline"]
+    scoring: {type: harbor}
+
+  - id: hil-swe-ask-human
+    name: "HiL-Bench SWE · ask human"
+    task: "Sửa repo phần mềm; agent có công cụ ask_human để hỏi về blocker"
+    data: harbor_swe
+    exclude: ["*-baseline", "*-full_info"]
+    scoring: {type: harbor}
