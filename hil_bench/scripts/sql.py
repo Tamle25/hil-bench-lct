@@ -2,12 +2,12 @@ import os
 import sys
 from pathlib import Path
 
-from .batch_runner import _run_batch, get_modes_from_flags
+from .batch_runner import _run_batch
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
-def run_sql_command(args):
+def run_sql_command(args, *, modes: list[tuple[str, bool, bool]]):
     """Handle sql command - uses same batching as SWE."""
     # Set HF_HOME and related cache directory defaults
     if not os.environ.get("HF_HOME"):
@@ -20,20 +20,10 @@ def run_sql_command(args):
 
     models = args.models
     passes = args.passes
-    enable_ask = args.ask_human
-    full_info = args.full_info
-    all_modes = getattr(args, "all_modes", False)
     max_runtime = getattr(args, "max_runtime", None)
 
     # Handle run_name
     run_name = getattr(args, "run_name", None) or getattr(args, "batch_session_name", None)
-
-    # Get modes to run
-    modes = get_modes_from_flags(
-        ask_human=enable_ask,
-        full_info=full_info,
-        all_modes=all_modes,
-    )
 
     # Resolve the input path (like SWE command)
     input_path = args.path.resolve()

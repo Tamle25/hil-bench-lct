@@ -9,6 +9,11 @@ from typing import Any, Callable
 
 from dotenv import load_dotenv
 
+from ..utils.compute_hil_metrics import (
+    apply_ask_human_gate,
+    calculate_ask_scores,
+    compute_hil_metrics,
+)
 from ..utils.instance_utils import extract_original_instance_id
 from ..utils.config_mapping import (
     load_and_apply_judge_config,
@@ -411,6 +416,7 @@ def collect_consolidated_metrics(results: list[BatchResult], config: BatchRunner
         # Collect per-instance results
         if metrics:
             resolved_set = set(metrics.get("resolved_instances", []))
+            artifact_resolved_set = set(metrics.get("artifact_resolved_instances", resolved_set))
             instances_data = metrics.get("instances", {})
 
             for instance_id, instance_info in instances_data.items():
@@ -422,6 +428,7 @@ def collect_consolidated_metrics(results: list[BatchResult], config: BatchRunner
                     "mode": mode,
                     "pass": result.config.pass_number,
                     "resolved": instance_id in resolved_set,
+                    "artifact_correct": instance_id in artifact_resolved_set,
                     "cost": instance_info.get("cost", 0),
                     "runtime": instance_info.get("runtime", 0),
                 }
@@ -445,6 +452,8 @@ def collect_consolidated_metrics(results: list[BatchResult], config: BatchRunner
     aggregate_keys = [
         "pass_at_1_rate",
         "pass_at_1_count",
+        "artifact_pass_at_1_rate",
+        "artifact_pass_at_1_count",
         "patches_generated",
         "patch_generation_rate",
         "total_cost",
@@ -457,6 +466,7 @@ def collect_consolidated_metrics(results: list[BatchResult], config: BatchRunner
         "recall",
         "ask_f1",
         "n_questions",
+        "n_relevant_questions",
         "n_blockers_present",
         "n_blockers_discovered",
     ]
@@ -496,6 +506,21 @@ def collect_consolidated_metrics(results: list[BatchResult], config: BatchRunner
             for key, values in metric_values.items():
                 if values:
                     mode_result[key] = aggregate_numeric_values(values)
+
+            if mode == "ask_human":
+                count_keys = (
+                    "n_questions",
+                    "n_relevant_questions",
+                    "n_blockers_present",
+                    "n_blockers_discovered",
+                )
+                hil_passes = [(metrics or {}).get("hil_metrics", {}) for _, metrics in runs]
+                if all(all(key in hil for key in count_keys) for hil in hil_passes):
+                    counts = {key: sum(hil[key] for hil in hil_passes) for key in count_keys}
+                    mode_result["ask_scores"] = {
+                        **counts,
+                        **calculate_ask_scores(*(counts[key] for key in count_keys)),
+                    }
 
             model_result["by_mode"][mode] = mode_result
 
@@ -566,6 +591,9 @@ def collect_consolidated_results(
         metrics = load_run_metrics(output_dir)
         raw_eval_results = metrics.get("raw_eval_results", {}) if metrics else {}
         resolved_ids = set(metrics.get("resolved_instances", [])) if metrics else set()
+        artifact_resolved_ids = (
+            set(metrics.get("artifact_resolved_instances", resolved_ids)) if metrics else set()
+        )
 
         for instance_id, pred_data in predictions.items():
             # Get the output (patch for SWE, SQL query for SQL)
@@ -584,6 +612,7 @@ def collect_consolidated_results(
                 "pass": pass_num,
                 "output": output,
                 "resolved": instance_id in resolved_ids,
+                "artifact_correct": instance_id in artifact_resolved_ids,
             }
 
             # Get evaluation results (keyed by full instance ID)
@@ -649,7 +678,7 @@ def collect_consolidated_results(
 
             elif task_type == "sql":
                 instance_result["results"] = {
-                    "status": "correct" if original_id in resolved_ids else "incorrect",
+                    "status": "correct" if instance_id in artifact_resolved_ids else "incorrect",
                     "error": eval_result.get("error") if eval_result else None,
                 }
 
@@ -731,6 +760,10 @@ def print_consolidated_metrics_summary(metrics: dict):
                     print(f"      {mode}: pass@1 = {mean:.1f}%")
 
                 # Print HIL metrics if available
+                ask_scores = mode_data.get("ask_scores")
+                if ask_scores is not None:
+                    print(f"             ask_f1 (all attempts) = {ask_scores['ask_f1']:.2%}")
+
                 ask_f1 = mode_data.get("ask_f1", {})
                 if ask_f1 and ask_f1.get("mean") is not None:
                     f1_mean = ask_f1["mean"]
@@ -1092,6 +1125,7 @@ def _run_batch(
             "error": None,
         }
         if not (pass_output_dir.exists() and (pass_output_dir / "preds.json").exists()):
+            result_info["error"] = "No predictions found for this pass"
             return result_info
         try:
             if task_type == "swe":
@@ -1158,41 +1192,35 @@ def _run_batch(
                 pass_suffix = f"__pass_{pass_num}" if passes > 1 else ""
                 pattern_suffix = f"__{model_safe}__{mode_safe}{pass_suffix}"
 
-                filtered_logs = {}
-                if ask_human_logs:
-                    filtered_logs = {k: v for k, v in ask_human_logs.items() if pattern_suffix in k}
+                filtered_logs = {
+                    instance_id: log
+                    for instance_id, log in (ask_human_logs or {}).items()
+                    if instance_id.endswith(pattern_suffix)
+                }
+                if len(filtered_logs) != len(original_instances):
+                    raise ValueError(
+                        f"Expected logs for {len(original_instances)} attempts, found {len(filtered_logs)}"
+                    )
+                evaluated_logs = filtered_logs
+                if task_type in ("swe", "sql"):
+                    raw_eval = metrics.get("raw_eval_results", metrics)
+                    results = raw_eval["results"]
+                    error_ids = set(raw_eval.get("error_ids", []))
+                    evaluated_logs = {
+                        instance_id: log
+                        for instance_id, log in filtered_logs.items()
+                        if results.get(instance_id, {}).get("completed")
+                        and instance_id not in error_ids
+                    }
+                if not evaluated_logs:
+                    raise ValueError("No completed evaluations for this pass")
+                hil_metrics = compute_hil_metrics(evaluated_logs)
+                metrics["hil_metrics"] = hil_metrics
+                if task_type in ("swe", "sql"):
+                    apply_ask_human_gate(metrics, hil_metrics)
 
-                if filtered_logs:
-                    from hil_bench.utils.compute_hil_metrics import compute_hil_metrics
-
-                    hil_metrics = compute_hil_metrics(filtered_logs)
-                    metrics["hil_metrics"] = hil_metrics
-
-                    # Save filtered logs for this pass directory
-                    pass_logs_file = pass_output_dir / "ask_human_logs.json"
-                    pass_logs_file.write_text(json.dumps(filtered_logs, indent=2))
-                else:
-                    # No questions asked - compute zero metrics
-                    # Count blockers from task folder or instance data
-                    try:
-                        from hil_bench.utils.compute_hil_metrics import (
-                            compute_zero_hil_metrics,
-                            get_n_blockers_from_registry,
-                        )
-
-                        n_blockers = get_n_blockers_from_registry(
-                            str(task_folder) if task_folder else None
-                        )
-                        metrics["hil_metrics"] = compute_zero_hil_metrics(n_blockers)
-                    except Exception:
-                        metrics["hil_metrics"] = {
-                            "precision": 0.0,
-                            "recall": 0.0,
-                            "ask_f1": 0.0,
-                            "n_questions": 0,
-                            "n_blockers_present": 0,
-                            "n_blockers_discovered": 0,
-                        }
+                pass_logs_file = pass_output_dir / "ask_human_logs.json"
+                pass_logs_file.write_text(json.dumps(filtered_logs, indent=2))
 
             # Save metrics
             metrics_file = pass_output_dir / "metrics.json"
@@ -1282,7 +1310,7 @@ def _run_batch(
             pass_number=pass_num,
             output_dir=pass_output_dir,
         )
-        all_results.append(BatchResult(config=run_config, returncode=returncode))
+        all_results.append(BatchResult(config=run_config, returncode=1 if error else returncode))
 
     # Collect and save consolidated metrics + results
     consolidated_metrics = collect_consolidated_metrics(all_results, config)

@@ -12,6 +12,7 @@ services:
         condition: service_healthy
     volumes:
       - harbor-shared:/harbor_shared
+      - ask-human-metrics:/ask-human-metrics:ro
     environment:
       - EXECUTE_SQL_CLIENT_TIMEOUT_SECONDS=1230
 
@@ -54,10 +55,10 @@ services:
     pull_policy: missing
     volumes:
       - ${CONTEXT_DIR:-.}/ask-human-data:/ask-human-data:ro
-      - harbor-shared:/harbor_shared
+      - ask-human-metrics:/ask-human-metrics
     environment:
       - BLOCKER_REGISTRY_PATH=/ask-human-data/blocker_registry.json
-      - OUTPUT_DIR=/harbor_shared
+      - OUTPUT_DIR=/ask-human-metrics
       - ASK_HUMAN_BACKEND=${ASK_HUMAN_BACKEND:-litellm_proxy}
       - ASK_HUMAN_MODEL=${ASK_HUMAN_MODEL:-gpt-4.1-mini}
       - LITELLM_API_KEY=${LITELLM_API_KEY:-}
@@ -81,3 +82,4 @@ services:
 
 volumes:
   harbor-shared:
+  ask-human-metrics:

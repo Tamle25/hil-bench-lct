@@ -38,7 +38,7 @@ def load_instance_from_task_dir(
     # Load problem statement (required)
     problem_path = task_dir / "problem_statement.txt"
     if problem_path.exists():
-        problem_statement = problem_path.read_text()
+        problem_statement = problem_path.read_text(encoding="utf-8")
     else:
         raise FileNotFoundError(f"No problem_statement.txt found in {task_dir}")
 

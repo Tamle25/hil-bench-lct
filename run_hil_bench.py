@@ -24,8 +24,10 @@ from datasets import load_dataset
 from dotenv import load_dotenv
 from tqdm import tqdm
 
+from hil_bench.utils.compute_hil_metrics import calculate_ask_scores, compute_hil_metrics
+
 HF_DATASET = "ScaleAI/hil-bench"
-RUN_OWNER_DIR = Path(os.getenv("HIL_BENCH_RUN_OWNER_DIR", "/tmp/hil_bench_run_owners"))
+RUN_OWNER_DIR = Path(os.getenv("HIL_BENCH_RUN_OWNER_DIR", str(Path(tempfile.gettempdir()) / "hil_bench_run_owners")))
 RUN_TIMEOUT_SECONDS = 21600
 DOCKER_LOADED_IMAGE_RE = re.compile(r"Loaded image:\s*(\S+)")
 DOCKER_LOADED_IMAGE_ID_RE = re.compile(r"Loaded image ID:\s*(\S+)")
@@ -55,9 +57,12 @@ CSV_COLUMNS = [
     "pass_num",
     "status",
     "resolved",
+    "artifact_correct",
+    "all_blockers_resolved",
     "cost",
     "num_steps",
     "num_questions",
+    "num_relevant_questions",
     "num_blockers_resolved",
     "total_num_blockers",
     "precision",
@@ -325,7 +330,7 @@ def prepare_swe_task(
         loaded_image_cache[image_link] = image_name
 
     blocker_registry_path = write_blocker_registry(task_dir, row)
-    (task_dir / "problem_statement.txt").write_text(str(row["problem"]))
+    (task_dir / "problem_statement.txt").write_text(str(row["problem"]), encoding="utf-8")
 
     for script_name in ("run_script.sh", "parser.py"):
         dest = task_dir / script_name
@@ -509,13 +514,7 @@ def run_hil_cli(
         "--output-dir",
         str(output_dir),
     ]
-    if args.modes == ["baseline", "ask_human", "full_info"]:
-        cmd.append("--all-modes")
-    else:
-        if "ask_human" in args.modes:
-            cmd.append("--ask-human")
-        if "full_info" in args.modes:
-            cmd.append("--full-info")
+    cmd.extend(["--modes", *args.modes])
     cmd.extend(["--judge-config", str(args.judge_config.resolve())])
     if args.max_steps is not None:
         cmd.extend(["--max-steps", str(args.max_steps)])
@@ -535,33 +534,6 @@ def run_hil_cli(
         if candidates:
             run_dir = candidates[-1]
     return result.returncode, run_dir
-
-
-def compute_hil_metrics(logs: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    total_questions = 0
-    total_blockers_present = 0
-    total_blockers_discovered = 0
-    for log_data in logs.values():
-        n_blockers = int(log_data.get("n_blockers", 0))
-        questions = log_data.get("questions") or log_data.get("entries") or []
-        discovered = len({q.get("blocker_name") for q in questions if q.get("blocker_name")})
-        n_questions = len(questions)
-        precision = discovered / n_questions if n_questions > 0 else 0.0
-        recall = discovered / n_blockers if n_blockers > 0 else 0.0
-        ask_f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-        log_data["precision"] = precision
-        log_data["recall"] = recall
-        log_data["ask_f1"] = ask_f1
-        total_questions += n_questions
-        total_blockers_present += n_blockers
-        total_blockers_discovered += discovered
-    return {
-        "instances": logs,
-        "precision": total_blockers_discovered / total_questions if total_questions > 0 else 0.0,
-        "recall": (
-            total_blockers_discovered / total_blockers_present if total_blockers_present > 0 else 0.0
-        ),
-    }
 
 
 def extract_traj_stats(traj_path: Path) -> dict[str, Any]:
@@ -619,71 +591,50 @@ def parse_metrics_rows(
                 metrics = json.loads(metrics_file.read_text())
                 preds = json.loads(preds_file.read_text())
                 ask_logs_file = pass_dir / "ask_human_logs.json"
-                hil_by_instance = {}
-                pass_hil_metrics = {}
+                logs = (metrics.get("hil_metrics") or {}).get("instances", {})
                 if ask_logs_file.exists():
                     logs = json.loads(ask_logs_file.read_text())
-                    hil_by_instance = compute_hil_metrics(logs).get("instances", {})
-                else:
-                    pass_hil_metrics = metrics.get("hil_metrics", {}) or {}
+                hil_by_instance = compute_hil_metrics(logs)["instances"]
 
                 sql_results = metrics.get("results", {})
-                swe_resolved = set(metrics.get("resolved_instances", []))
+                resolved_ids = set(metrics.get("resolved_instances", []))
+                artifact_resolved_ids = set(metrics.get("artifact_resolved_instances", resolved_ids))
                 swe_instance_metrics = metrics.get("instances", {})
                 raw_eval = metrics.get("raw_eval_results", {}) or {}
                 swe_eval_results = raw_eval.get("results", {}) if isinstance(raw_eval, dict) else {}
                 swe_error_ids = set(raw_eval.get("error_ids", [])) if isinstance(raw_eval, dict) else set()
-                for full_instance_id, pred in preds.items():
-                    task_name = full_instance_id.split("__")[0]
+                for full_instance_id in preds:
                     model_name = model_dir.name
+                    task_name = full_instance_id.split("__")[0]
                     traj_path = pass_dir / full_instance_id / f"{full_instance_id}.traj"
                     traj_stats = extract_traj_stats(traj_path)
 
                     if task_type == "sql":
                         sql_result = sql_results.get(full_instance_id, {})
-                        sql_completed = sql_result.get("completed", False)
-                        resolved = sql_result.get("resolved", False) if sql_completed else None
-                        patch = str(pred.get("model_patch", "")).strip()
-                        if not sql_completed:
-                            status = "infra_error"
-                            resolved = None
-                        elif resolved:
-                            status = "resolved"
-                        else:
-                            status = "unresolved"
+                        completed = sql_result.get("completed", False)
+                        artifact_correct = bool(sql_result.get("resolved")) if completed else None
                         cost = sql_result.get("cost", traj_stats.get("cost"))
                         num_steps = traj_stats.get("num_steps") or sql_result.get("num_steps")
                     else:
                         eval_result = swe_eval_results.get(full_instance_id) or swe_eval_results.get(task_name) or {}
                         completed = eval_result.get("completed") if isinstance(eval_result, dict) else None
                         in_error_ids = task_name in swe_error_ids or full_instance_id in swe_error_ids
-                        resolved = full_instance_id in swe_resolved
-                        patch = str(pred.get("model_patch", "")).strip()
-                        if in_error_ids or not completed:
-                            status = "infra_error"
-                            resolved = None
-                        else:
-                            status = "resolved" if resolved else "unresolved"
+                        completed = completed and not in_error_ids
+                        artifact_correct = full_instance_id in artifact_resolved_ids if completed else None
                         inst_metrics = swe_instance_metrics.get(full_instance_id, {})
                         cost = inst_metrics.get("cost", traj_stats.get("cost"))
                         num_steps = traj_stats.get("num_steps") or inst_metrics.get("num_steps")
 
                     h = hil_by_instance.get(full_instance_id) or {}
-                    questions = h.get("questions") or h.get("entries") or []
-                    n_questions = traj_stats.get("num_questions")
-                    if n_questions is None:
-                        n_questions = len(questions)
-                    n_blockers = h.get("n_blockers")
-                    n_blockers_discovered = len(
-                        {q.get("blocker_name") for q in questions if q.get("blocker_name")}
-                    )
-                    if n_questions is None and not h and pass_hil_metrics:
-                        # When no per-instance logs file is emitted (e.g., ask_human mode with zero questions),
-                        # batch_runner stores only pass-level zero HIL metrics in metrics.json.
-                        n_questions = pass_hil_metrics.get("n_questions")
-                        n_blockers = pass_hil_metrics.get("n_blockers_present")
-                        discovered = pass_hil_metrics.get("n_blockers_discovered", 0)
-                        n_blockers_discovered = int(discovered) if discovered is not None else 0
+                    all_blockers_resolved = h.get("all_blockers_resolved")
+                    if not completed:
+                        resolved = None
+                        status = "infra_error"
+                    else:
+                        resolved = bool(artifact_correct)
+                        if mode == "ask_human":
+                            resolved = resolved and bool(all_blockers_resolved)
+                        status = "resolved" if resolved else "unresolved"
                     row = {
                         "task_type": task_type,
                         "task_name": task_name,
@@ -692,18 +643,17 @@ def parse_metrics_rows(
                         "pass_num": pass_num,
                         "status": status,
                         "resolved": resolved,
+                        "artifact_correct": artifact_correct,
+                        "all_blockers_resolved": all_blockers_resolved,
                         "cost": cost,
                         "num_steps": num_steps,
-                        "num_questions": n_questions if n_questions is not None else None,
-                        "num_blockers_resolved": (
-                            n_blockers_discovered
-                            if (n_questions is not None or n_blockers is not None)
-                            else None
-                        ),
-                        "total_num_blockers": n_blockers,
-                        "precision": h.get("precision", pass_hil_metrics.get("precision")),
-                        "recall": h.get("recall", pass_hil_metrics.get("recall")),
-                        "f1": h.get("ask_f1", pass_hil_metrics.get("ask_f1")),
+                        "num_questions": h.get("n_questions", traj_stats.get("num_questions")),
+                        "num_relevant_questions": h.get("n_relevant_questions"),
+                        "num_blockers_resolved": h.get("n_blockers_discovered"),
+                        "total_num_blockers": h.get("n_blockers"),
+                        "precision": h.get("precision"),
+                        "recall": h.get("recall"),
+                        "f1": h.get("ask_f1"),
                         "tokens_sent": traj_stats.get("tokens_sent"),
                         "tokens_received": traj_stats.get("tokens_received"),
                         "log_dir": log_dir,
@@ -730,9 +680,12 @@ def parse_metrics_rows(
                     "pass_num": pass_num,
                     "status": "infra_error",
                     "resolved": None,
+                    "artifact_correct": None,
+                    "all_blockers_resolved": None,
                     "cost": None,
                     "num_steps": None,
                     "num_questions": None,
+                    "num_relevant_questions": None,
                     "num_blockers_resolved": None,
                     "total_num_blockers": None,
                     "precision": None,
@@ -774,9 +727,10 @@ def summarize_rows(
 ) -> dict[str, dict[str, dict[str, Any]]]:
     grouped_attempt_rows = defaultdict(list)
     for row in rows:
-        grouped_attempt_rows[(row["task_name"], row["model"], row["mode"])].append(row)
+        key = (row["task_type"], row["task_name"], row["model"], row["mode"])
+        grouped_attempt_rows[key].append(row)
     grouped_mode_model_attempts = defaultdict(list)
-    for (task_name, model, mode), attempt_rows in grouped_attempt_rows.items():
+    for (_, _, model, mode), attempt_rows in grouped_attempt_rows.items():
         trajectory_cache: dict[str, list[dict[str, str]]] = {}
         valid_passes = []
         for row in sorted(attempt_rows, key=lambda r: int(r.get("pass_num", 0))):
@@ -797,33 +751,42 @@ def summarize_rows(
     finalized: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
     for (mode, model), attempt_passes in grouped_mode_model_attempts.items():
         num_solved_by_pass_k = {k: 0 for k in range(1, expected_passes + 1)}
+        num_artifacts_correct_by_pass_k = {k: 0 for k in range(1, expected_passes + 1)}
         num_attempts_with_k_passes = {k: 0 for k in range(1, expected_passes + 1)}
         total_attempts_and_passes = 0
         total_cost = 0.0
         total_steps = 0.0
         total_tokens_sent = 0.0
         total_tokens_received = 0.0
-        total_questions = 0.0
-        total_blockers_resolved = 0.0
-        total_blockers_present = 0.0
+        total_questions = 0
+        total_relevant_questions = 0
+        total_blockers_resolved = 0
+        total_blockers_present = 0
+        has_complete_ask_logs = True
         for valid_passes in attempt_passes:
             num_valid = len(valid_passes)
             for k in range(1, expected_passes + 1):
                 if num_valid >= k:
                     num_attempts_with_k_passes[k] += 1
             for k in range(1, num_valid + 1):
-                if any(bool(valid_passes[i].get("resolved")) for i in range(k)):
+                first_k = valid_passes[:k]
+                if any(row.get("resolved") for row in first_k):
                     num_solved_by_pass_k[k] += 1
+                if any(row.get("artifact_correct", row.get("resolved")) for row in first_k):
+                    num_artifacts_correct_by_pass_k[k] += 1
             for row in valid_passes:
                 total_attempts_and_passes += 1
                 total_cost += float(row.get("cost") or 0.0)
                 total_steps += float(row.get("num_steps") or 0.0)
                 total_tokens_sent += float(row.get("tokens_sent") or 0.0)
                 total_tokens_received += float(row.get("tokens_received") or 0.0)
-                total_questions += float(row.get("num_questions") or 0.0)
+                total_questions += int(row.get("num_questions") or 0)
                 if mode == "ask_human":
-                    total_blockers_resolved += float(row.get("num_blockers_resolved") or 0.0)
-                    total_blockers_present += float(row.get("total_num_blockers") or 0.0)
+                    if row.get("total_num_blockers") is None:
+                        has_complete_ask_logs = False
+                    total_relevant_questions += int(row.get("num_relevant_questions") or 0)
+                    total_blockers_resolved += int(row.get("num_blockers_resolved") or 0)
+                    total_blockers_present += int(row.get("total_num_blockers") or 0)
 
         metrics: dict[str, Any] = {
             "num_included_attempts": len(attempt_passes),
@@ -846,20 +809,18 @@ def summarize_rows(
         for k in range(1, expected_passes + 1):
             denominator = num_attempts_with_k_passes[k]
             metrics[f"pass_at_{k}"] = num_solved_by_pass_k[k] / denominator if denominator > 0 else 0.0
+            metrics[f"artifact_pass_at_{k}"] = (
+                num_artifacts_correct_by_pass_k[k] / denominator if denominator else 0.0
+            )
             metrics[f"pass_at_{k}_n"] = denominator
         if mode == "ask_human":
-            ask_precision = total_blockers_resolved / total_questions if total_questions > 0 else 0.0
-            ask_recall = (
-                total_blockers_resolved / total_blockers_present if total_blockers_present > 0 else 0.0
+            scores = calculate_ask_scores(
+                total_questions, total_relevant_questions, total_blockers_present, total_blockers_resolved
             )
-            ask_f1 = (
-                2 * ask_precision * ask_recall / (ask_precision + ask_recall)
-                if (ask_precision + ask_recall) > 0
-                else 0.0
-            )
-            metrics["ask_precision"] = ask_precision
-            metrics["ask_recall"] = ask_recall
-            metrics["ask_f1"] = ask_f1
+            # Historical runs without per-attempt registries cannot yield a valid aggregate.
+            metrics["ask_precision"] = scores["precision"] if has_complete_ask_logs else None
+            metrics["ask_recall"] = scores["recall"] if has_complete_ask_logs else None
+            metrics["ask_f1"] = scores["ask_f1"] if has_complete_ask_logs else None
             metrics["avg_num_questions_per_pass"] = (
                 total_questions / total_attempts_and_passes if total_attempts_and_passes > 0 else 0.0
             )
@@ -965,7 +926,7 @@ def trajectory_has_env_died_obs(trajectory: list[dict[str, str]]) -> bool:
 
 def trajectory_has_unknown_error(trajectory: Any) -> bool:
     """True if any trajectory step observation ended due to an unknown error"""
-    if not isinstance(trajectory, list):
+    if not isinstance(trajectory, list) or not trajectory:
         return False
     last_step = trajectory[-1]
     if not isinstance(last_step, dict):
@@ -1136,7 +1097,7 @@ def write_public_outputs(
 
 def main() -> None:
     load_dotenv()
-    hf_home_default = "/tmp/huggingface_cache"
+    hf_home_default = str(Path(tempfile.gettempdir()) / "huggingface_cache")
     if not os.environ.get("HF_HOME"):
         os.environ["HF_HOME"] = hf_home_default
     for var in ["HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE", "SENTENCE_TRANSFORMERS_HOME"]:
@@ -1178,6 +1139,10 @@ def main() -> None:
         choices=["baseline", "ask_human", "full_info"],
         default=["baseline", "ask_human", "full_info"],
         help="Modes to run.",
+    )
+    parser.add_argument("--jira-export", type=Path, help="Local Jira issue export in JSON.")
+    parser.add_argument(
+        "--jira-annotations", type=Path, help="Reviewed Vietnamese tasks, blockers, and oracle assets."
     )
     parser.add_argument(
         "--num-concurrent-datapoints",
@@ -1234,7 +1199,7 @@ def main() -> None:
     parser.add_argument(
         "--workspace-dir",
         type=Path,
-        default=Path("/tmp"),
+        default=Path(tempfile.gettempdir()),
         help="Parent directory where temporary run directories are created.",
     )
     parser.add_argument(
@@ -1254,19 +1219,36 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
-    
-    run_name = args.run_name or f"{args.task_type}_run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    if (args.jira_export is None) != (args.jira_annotations is None):
+        parser.error("--jira-export and --jira-annotations must be supplied together")
+
+    task_types = [args.task_type] if args.task_type in {"sql", "swe"} else ["sql", "swe"]
+    if args.jira_export is not None:
+        from hil_bench.jira_dataset import load_jira_rows
+
+        try:
+            all_rows = load_jira_rows(args.jira_export, args.jira_annotations)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        available_types = {row["task_type"] for row in all_rows}
+        missing_types = set(task_types) - available_types
+        if missing_types:
+            parser.error(f"Jira annotations contain no tasks for: {', '.join(sorted(missing_types))}")
+        run_prefix = f"jira_vi_{args.task_type}"
+        print(f"Loaded {len(all_rows)} reviewed Vietnamese Jira task(s).")
+    else:
+        print(f"📦 Loading HF dataset {HF_DATASET}")
+        dataset = load_dataset(HF_DATASET, split="train")
+        all_rows = [dict(row) for row in dataset]
+        run_prefix = args.task_type
+
+    run_name = args.run_name or f"{run_prefix}_run_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
     output_dir = args.output_dir.resolve()
     workspace_parent = args.workspace_dir.resolve()
     workspace_parent.mkdir(parents=True, exist_ok=True)
     workspace_dir = Path(tempfile.mkdtemp(prefix=f"hil_bench_{run_name}_", dir=str(workspace_parent)))
     keep_workspace = bool(args.keep_workspace)
 
-    print(f"📦 Loading HF dataset {HF_DATASET}")
-    dataset = load_dataset(HF_DATASET, split="train")
-    all_rows = [dict(row) for row in dataset]
-
-    task_types = [args.task_type] if args.task_type in {"sql", "swe"} else ["sql", "swe"]
     combined_rows = []
     run_result_dirs = []
 
@@ -1292,7 +1274,12 @@ def main() -> None:
             existing_run_dir = output_dir / sub_run_name
 
             if args.rerun and existing_run_dir.exists():
-                needs_rerun = find_passes_needing_rerun(existing_run_dir, args.passes)
+                requested_models = {model.replace("/", "_").replace(":", "_") for model in args.models}
+                needs_rerun = {
+                    (model, mode): slots
+                    for (model, mode), slots in find_passes_needing_rerun(existing_run_dir, args.passes).items()
+                    if model in requested_models and mode in args.modes
+                }
                 if not needs_rerun:
                     print(f"✅ All passes for {task_type.upper()} are already valid — skipping rerun.")
                     run_results_dir = existing_run_dir

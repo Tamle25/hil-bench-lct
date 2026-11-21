@@ -1,0 +1,6 @@
+model: Qwen/Qwen2.5-32B-Instruct
+
+hosting:
+  type: self_hosted
+  self_hosted_base_url_env: ASK_HUMAN_SELF_HOSTED_BASE_URL
+  # self_hosted_api_key_env: ASK_HUMAN_VLLM_API_KEY

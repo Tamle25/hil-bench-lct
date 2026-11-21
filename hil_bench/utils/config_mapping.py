@@ -9,7 +9,7 @@ import yaml
 VALID_TASK_TYPES = {"sql", "swe"}
 VALID_MODES = {"baseline", "ask_human", "full_info"}
 VALID_AGENT_HOSTING_TYPES = {"litellm_proxy", "provider_direct", "self_hosted"}
-VALID_JUDGE_HOSTING_TYPES = {"litellm_proxy", "provider_direct", "self_hosted"}
+VALID_JUDGE_HOSTING_TYPES = {"litellm_proxy", "provider_direct", "self_hosted", "codex_cli"}
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -134,6 +134,8 @@ def load_and_apply_judge_config(judge_config_path: str | Path) -> None:
     os.environ["ASK_HUMAN_HOSTING_TYPE"] = host_type
     if host_type in {"litellm_proxy", "provider_direct"}:
         os.environ["ASK_HUMAN_PROVIDER"] = "litellm"
+    elif host_type == "codex_cli":
+        os.environ["ASK_HUMAN_PROVIDER"] = "codex_cli"
     else:
         os.environ["ASK_HUMAN_PROVIDER"] = "self_hosted"
 

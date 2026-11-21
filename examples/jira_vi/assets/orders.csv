@@ -1,0 +1,7 @@
+original_column_name,combined_description,data_format
+order_id,Mã đơn hàng duy nhất,INTEGER
+region,Khu vực giao đơn,TEXT
+status,Mã trạng thái xử lý đơn,TEXT
+original_due_at,Thời điểm giao được cam kết ban đầu,TEXT
+adjusted_due_at,Hạn giao đã điều chỉnh nếu có,TEXT
+delivered_at,Thời điểm giao thực tế nếu có,TEXT

@@ -1,0 +1,51 @@
+{
+  "language": "vi",
+  "tasks": [
+    {
+      "key": "DEMO-101",
+      "task_type": "sql",
+      "problem_source": "jira_description",
+      "blockers": [
+        {
+          "id": "report_period",
+          "type": "missing_information",
+          "description": "Kỳ đối soát tuần chưa có mốc ngày bắt đầu và kết thúc để lọc thời điểm giao thực tế.",
+          "example_questions": [
+            "Kỳ đối soát tuần bắt đầu và kết thúc vào thời điểm nào?"
+          ],
+          "resolution": "Tính đơn giao thực tế từ 00:00 ngày 07/09/2026 đến trước 00:00 ngày 14/09/2026. Dữ liệu đã lưu theo giờ Việt Nam."
+        },
+        {
+          "id": "completed_status",
+          "type": "ambiguity",
+          "description": "Có nhiều mã trạng thái kết thúc xử lý. Yêu cầu chưa định nghĩa mã nào được tính là đơn đã hoàn tất giao hàng.",
+          "example_questions": [
+            "Mã trạng thái nào được tính là đơn đã hoàn tất trong báo cáo?"
+          ],
+          "resolution": "Chỉ tính đơn có status = DELIVERED. Không tính đơn CLOSED, dù có thời điểm giao."
+        },
+        {
+          "id": "sla_basis",
+          "type": "contradiction",
+          "description": "Tài liệu nghiệp vụ và checklist vận hành mâu thuẫn về cột hạn cam kết dùng để xác định giao trễ.",
+          "example_questions": [
+            "Nếu hạn ban đầu và hạn đã điều chỉnh khác nhau, lấy hạn nào để xác định đơn giao trễ?"
+          ],
+          "resolution": "Dùng adjusted_due_at nếu có giá trị. Nếu trống, lấy original_due_at. Đơn chỉ trễ khi delivered_at sau hạn đó."
+        }
+      ],
+      "sql": {
+        "database_name": "delivery_demo",
+        "database_path": "assets/delivery_demo.sqlite",
+        "schema_paths": [
+          "assets/table_descriptions.csv",
+          "assets/orders.csv"
+        ],
+        "ground_truth_path": "assets/expected.sql",
+        "business_info": [
+          "Báo cáo vận hành nhóm đơn theo khu vực giao của đơn. Các cột thời gian cùng dùng định dạng YYYY-MM-DD HH:MM:SS."
+        ]
+      }
+    }
+  ]
+}

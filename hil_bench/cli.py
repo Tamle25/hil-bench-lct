@@ -13,35 +13,35 @@ from .scripts.swe import create_single_instance_file, resolve_swe_input_path
 load_dotenv()
 
 
-def _validate_mode_flags(args) -> None:
-    """Enforce that --all-modes is exclusive with individual mode flags."""
+def _requested_modes(args) -> list[tuple[str, bool, bool]]:
+    if args.modes:
+        if args.all_modes or args.ask_human or args.full_info:
+            sys.exit("--modes cannot be combined with --all-modes, --ask-human or --full-info")
+        return [(mode, mode == "ask_human", mode == "full_info") for mode in dict.fromkeys(args.modes)]
     if args.all_modes and (getattr(args, "ask_human", False) or getattr(args, "full_info", False)):
-        print(
-            "Error: --all-modes cannot be combined with --ask-human or --full-info",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        sys.exit("--all-modes cannot be combined with --ask-human or --full-info")
+    return get_modes_from_flags(ask_human=args.ask_human, full_info=args.full_info, all_modes=args.all_modes)
+
+
+def _add_mode_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--ask-human", action="store_true")
+    parser.add_argument("--full-info", action="store_true")
+    parser.add_argument("--all-modes", action="store_true")
+    parser.add_argument("--modes", nargs="+", choices=["baseline", "ask_human", "full_info"])
 
 
 def sql_command(args):
-    """Handle sql command with mode-flag validation."""
-    _validate_mode_flags(args)
-    run_sql_command(args)
+    run_sql_command(args, modes=_requested_modes(args))
 
 
 def swe_command(args):
     """Handle swe command."""
-    _validate_mode_flags(args)
+    modes = _requested_modes(args)
     path = args.path.resolve()
     input_type, resolved_path, task_folder, temp_instances_file = resolve_swe_input_path(
         path, max_tasks=args.num_tasks
     )
 
-    modes = get_modes_from_flags(
-        ask_human=args.ask_human,
-        full_info=args.full_info,
-        all_modes=args.all_modes,
-    )
     model_names = args.model_names
     passes = args.passes
 
@@ -57,7 +57,7 @@ def swe_command(args):
     try:
         if input_type == "single":
             instance = create_single_instance_file(resolved_path, full_info=False)
-            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir="/tmp")
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
             tmp.write(json.dumps([instance], indent=2))
             tmp.close()
             temp_instances_file = Path(tmp.name)
@@ -113,9 +113,7 @@ def main():
         help="Run only the first N SQL instances from the input instances file.",
     )
     sql_parser.add_argument("--num-workers", "-w", type=int, default=15)
-    sql_parser.add_argument("--ask-human", action="store_true")
-    sql_parser.add_argument("--full-info", action="store_true")
-    sql_parser.add_argument("--all-modes", action="store_true")
+    _add_mode_arguments(sql_parser)
     sql_parser.add_argument("--cleanup-docker", action="store_true", default=True)
     sql_parser.add_argument("--no-cleanup-docker", dest="cleanup_docker", action="store_false")
     sql_parser.add_argument("--max-runtime", type=int, default=None)
@@ -141,9 +139,7 @@ def main():
     swe_parser.add_argument("path", type=Path)
     swe_parser.add_argument("--model", "-m", dest="model_names", nargs="+", required=True)
     swe_parser.add_argument("--output-dir", "-o", type=Path, default=None)
-    swe_parser.add_argument("--ask-human", action="store_true")
-    swe_parser.add_argument("--full-info", action="store_true")
-    swe_parser.add_argument("--all-modes", action="store_true")
+    _add_mode_arguments(swe_parser)
     swe_parser.add_argument("--passes", "-k", type=int, default=1)
     swe_parser.add_argument("--run-name", type=str, default=None)
     swe_parser.add_argument("--num-tasks", "-n", type=int, default=None)

@@ -1,0 +1,47 @@
+[
+  {
+    "task_id": "DEMO-101",
+    "question": "Cho mình xin hai mốc thời gian của tuần chốt báo cáo.",
+    "expected_blocker": "report_period"
+  },
+  {
+    "task_id": "DEMO-101",
+    "question": "Kỳ này lấy ngày giao từ ngày nào đến trước ngày nào?",
+    "expected_blocker": "report_period"
+  },
+  {
+    "task_id": "DEMO-101",
+    "question": "Những giá trị nào của cột status đủ điều kiện là đơn đã hoàn tất?",
+    "expected_blocker": "completed_status"
+  },
+  {
+    "task_id": "DEMO-101",
+    "question": "Đơn đóng hồ sơ có được tính vào tập đơn hoàn tất giao hàng không?",
+    "expected_blocker": "completed_status"
+  },
+  {
+    "task_id": "DEMO-101",
+    "question": "Khi có hai hạn cam kết khác nhau, dùng mốc nào để xác định giao muộn?",
+    "expected_blocker": "sla_basis"
+  },
+  {
+    "task_id": "DEMO-101",
+    "question": "Phải ưu tiên trường hạn giao nào khi hai quy định đưa ra hai mốc khác nhau?",
+    "expected_blocker": "sla_basis"
+  },
+  {
+    "task_id": "DEMO-101",
+    "question": "Có thể cho mình biết thêm về các đơn hàng không?",
+    "expected_blocker": null
+  },
+  {
+    "task_id": "DEMO-101",
+    "question": "Tên hãng vận chuyển lấy từ cột nào?",
+    "expected_blocker": null
+  },
+  {
+    "task_id": "DEMO-101",
+    "question": "Kỳ báo cáo bắt đầu ngày nào và ai duyệt báo cáo?",
+    "expected_blocker": null
+  }
+]

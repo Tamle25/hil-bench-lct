@@ -6,17 +6,17 @@ services:
       ask-human:
         condition: service_healthy
     volumes:
-      - ask-human-metrics:/harbor_shared
+      - ask-human-metrics:/ask-human-metrics:ro
 
   ask-human:
     image: public.ecr.aws/b2z8n5q1/hil-bench@sha256:702628a98d6d00f8ee5975d88d91826ca0759f33a7883f55c8bb2483f5205e5b
     pull_policy: missing
     volumes:
       - ${CONTEXT_DIR:-.}/ask-human-data:/ask-human-data:ro
-      - ask-human-metrics:/harbor_shared
+      - ask-human-metrics:/ask-human-metrics
     environment:
       - BLOCKER_REGISTRY_PATH=/ask-human-data/blocker_registry.json
-      - OUTPUT_DIR=/harbor_shared
+      - OUTPUT_DIR=/ask-human-metrics
       - ASK_HUMAN_BACKEND=${ASK_HUMAN_BACKEND:-litellm_proxy}
       - ASK_HUMAN_MODEL=${ASK_HUMAN_MODEL:-gpt-4.1-mini}
       - LITELLM_API_KEY=${LITELLM_API_KEY:-}

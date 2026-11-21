@@ -26,6 +26,8 @@ stderr_log = tmp_dir / "sweap_stderr.log"
 output_json = tmp_dir / "sweap_output.json"
 test_patch_file = tests_dir / "test_patch.diff"
 fail_to_pass_file = tests_dir / "fail_to_pass.json"
+ASK_HUMAN_METRICS_PATH = Path("/ask-human-metrics/ask_human_metrics.json")
+EXPECTED_BLOCKERS = 3
 
 
 def log(msg: str) -> None:
@@ -37,8 +39,44 @@ def write_reward(value: int) -> None:
     log(f"reward={value}")
 
 
+def get_ask_human_metrics() -> dict:
+    try:
+        data = json.loads(ASK_HUMAN_METRICS_PATH.read_text(encoding="utf-8"))
+        questions = data["questions"]
+        if data["n_blockers"] != EXPECTED_BLOCKERS or not isinstance(questions, list):
+            raise ValueError("Unexpected blocker count or question log")
+        matches = [entry["blocker_name"] for entry in questions if entry["blocker_name"] is not None]
+        resolved = set(matches)
+        if len(resolved) > EXPECTED_BLOCKERS or resolved != set(data["blockers_resolved_list"]):
+            raise ValueError("Inconsistent blocker matches")
+        available = True
+    except (OSError, TypeError, ValueError, KeyError) as exc:
+        print(f"Could not read ask_human metrics: {exc}", flush=True)
+        questions, matches, resolved = [], [], set()
+        available = False
+
+    precision = len(matches) / len(questions) if questions else 0.0
+    recall = len(resolved) / EXPECTED_BLOCKERS
+    return {
+        "n_questions": len(questions),
+        "n_relevant_questions": len(matches),
+        "n_blockers": EXPECTED_BLOCKERS,
+        "blockers_resolved": len(resolved),
+        "precision": precision,
+        "recall": recall,
+        "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
+        "metrics_available": available,
+        "all_blockers_resolved": available and len(resolved) == EXPECTED_BLOCKERS,
+    }
+
+
 def write_reward_json(data: dict) -> None:
-    data.setdefault("reward", data.get("resolved", 0))
+    ask_metrics = get_ask_human_metrics()
+    data["output_correct"] = data["resolved"]
+    data["resolved"] = int(data["output_correct"] == 1 and ask_metrics["all_blockers_resolved"])
+    data["reward"] = data["resolved"]
+    data.update(ask_metrics)
+    write_reward(data["reward"])
     reward_json_path = reward_path.parent / "reward.json"
     reward_json_path.write_text(json.dumps(data, indent=2))
     log(f"reward.json: {data}")
@@ -116,7 +154,6 @@ if patch_content:
     log(res.stderr)
     if res.returncode != 0:
         log("ERROR: test_patch failed to apply")
-        write_reward(0)
         write_reward_json({"resolved": 0, "fail_to_pass_passed": 0, "fail_to_pass_total": 0})
         sys.exit(0)
 
@@ -125,8 +162,7 @@ with open(fail_to_pass_file) as f:
     fail_to_pass = json.load(f)
 
 if not fail_to_pass:
-    log("No FAIL_TO_PASS tests defined; writing reward=1")
-    write_reward(1)
+    log("No FAIL_TO_PASS tests defined")
     write_reward_json({"resolved": 1, "fail_to_pass_passed": 0, "fail_to_pass_total": 0})
     sys.exit(0)
 
@@ -178,7 +214,7 @@ log(parse_result.stdout)
 log(parse_result.stderr)
 if parse_result.returncode != 0:
     log("ERROR: parser.py failed")
-    write_reward(0)
+    write_reward_json({"resolved": 0, "fail_to_pass_passed": 0, "fail_to_pass_total": len(fail_to_pass)})
     sys.exit(0)
 
 # --- Step 8: Check all FAIL_TO_PASS tests ---
@@ -222,30 +258,11 @@ for required_test in fail_to_pass:
         all_pass = False
 
 # --- Step 9: Write binary reward.txt and detailed reward.json ---
-reward_value = 1 if all_pass else 0
-write_reward(reward_value)
-
-reward_data: dict = {
-    "resolved": reward_value,
+write_reward_json({
+    "resolved": int(all_pass),
     "fail_to_pass_passed": n_passed,
     "fail_to_pass_total": len(fail_to_pass),
-}
-# Merge ask_human sidecar metrics when available (ask_human mode only).
-# The sidecar writes to /harbor_shared/ via the shared named volume.
-ask_human_metrics_path = Path("/harbor_shared/ask_human_metrics.json")
-if ask_human_metrics_path.exists():
-    try:
-        with open(ask_human_metrics_path) as f:
-            ah = json.load(f)
-        reward_data["n_questions"] = ah.get("total_questions", 0)
-        reward_data["n_blockers"] = ah.get("n_blockers", 0)
-        reward_data["blockers_resolved"] = ah.get("blockers_resolved", 0)
-        reward_data["precision"] = ah.get("precision", 0.0)
-        reward_data["recall"] = ah.get("recall", 0.0)
-        reward_data["f1"] = ah.get("f1", 0.0)
-    except Exception as e:
-        log(f"WARNING: could not read ask_human_metrics.json: {e}")
-write_reward_json(reward_data)
+})
 
 # --- Step 10: Cleanup - reset test files to HEAD (or remove if new) ---
 if patch_content:

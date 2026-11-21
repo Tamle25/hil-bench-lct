@@ -1,0 +1,4 @@
+model: openai/gpt-4o
+
+hosting:
+  type: provider_direct

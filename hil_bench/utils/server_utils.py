@@ -1,12 +1,16 @@
 """Utilities for managing the ask_human server."""
 
 import json
+import os
+import secrets
+import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
@@ -20,22 +24,28 @@ class AskHumanServer:
     process: subprocess.Popen
     port: int
     url: str
+    logs_token: str = field(repr=False)
 
-    def get_logs(self, timeout: int = 10) -> dict | None:
-        """Retrieve logs from the server."""
+    def get_logs(self, timeout: int = 10, *, instance_ids: list[str] | None = None) -> dict:
+        """Retrieve logs, including zero-question logs for the requested instances."""
+        payload = {} if instance_ids is None else {"instance_ids": instance_ids}
         try:
             req = urllib.request.Request(
                 f"http://localhost:{self.port}/get_logs",
-                data=b"{}",
-                headers={"Content-Type": "application/json"},
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.logs_token}",
+                },
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=timeout) as response:
-                if response.status == 200:
-                    return json.loads(response.read().decode())
-        except Exception:
-            pass
-        return None
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise AskHumanServerError(f"Could not retrieve ask_human logs: {detail}") from exc
+        except (OSError, ValueError) as exc:
+            raise AskHumanServerError(f"Could not retrieve ask_human logs: {exc}") from exc
 
     def stop(self, timeout: int = 5) -> None:
         """Stop the server gracefully."""
@@ -156,17 +166,21 @@ def start_ask_human_server(
     if verbose:
         print(f"🚀 Starting ask_human server on port {actual_port}...")
 
+    logs_token = secrets.token_urlsafe(32)
+    server_env = {**os.environ, "ASK_HUMAN_LOGS_TOKEN": logs_token}
     if capture_output:
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=server_env,
         )
     else:
         process = subprocess.Popen(
             cmd,
             stdout=sys.stdout,
             stderr=sys.stderr,
+            env=server_env,
         )
 
     time.sleep(startup_wait)
@@ -178,11 +192,29 @@ def start_ask_human_server(
             stderr_output = process.stderr.read().decode()
         raise AskHumanServerError(f"Failed to start ask_human server: {stderr_output}")
 
+    # Wait until the server actually accepts connections. Cold imports
+    # (litellm/Flask) can take longer than `startup_wait` on some machines, and
+    # the pre-flight get_logs() call would otherwise hit a refused connection.
+    ready = False
+    for _ in range(60):
+        if process.poll() is not None:
+            break
+        try:
+            with socket.create_connection(("127.0.0.1", actual_port), timeout=1.0):
+                ready = True
+                break
+        except OSError:
+            time.sleep(0.5)
+    if not ready:
+        raise AskHumanServerError(
+            f"ask_human server did not become ready on port {actual_port}"
+        )
+
     server_url = f"http://localhost:{actual_port}/ask"
     if verbose:
         print(f"✅ ask_human server started at {server_url}")
 
-    server = AskHumanServer(process=process, port=actual_port, url=server_url)
+    server = AskHumanServer(process=process, port=actual_port, url=server_url, logs_token=logs_token)
 
     try:
         yield server

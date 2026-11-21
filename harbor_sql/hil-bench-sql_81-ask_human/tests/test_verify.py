@@ -15,7 +15,8 @@ GOLDEN_OUTPUT_PATH = Path("/tests/golden_output.csv")
 REWARD_DIR = Path("/logs/verifier")
 REWARD_PATH = REWARD_DIR / "reward.json"
 REWARD_TXT_PATH = REWARD_DIR / "reward.txt"
-ASK_HUMAN_METRICS_PATH = Path("/harbor_shared/ask_human_metrics.json")
+ASK_HUMAN_METRICS_PATH = Path("/ask-human-metrics/ask_human_metrics.json")
+EXPECTED_BLOCKERS = 3
 MAX_QUERY_EXECUTION_TIMEOUT = 1200
 
 
@@ -157,26 +158,33 @@ def parse_golden_output(golden_output_str: str) -> pd.DataFrame:
 
 
 def get_ask_human_metrics() -> dict:
-    if ASK_HUMAN_METRICS_PATH.exists():
-        try:
-            data = json.loads(ASK_HUMAN_METRICS_PATH.read_text())
-            return {
-                "n_questions": int(data.get("total_questions", len(data.get("questions", [])))),
-                "n_blockers": int(data.get("n_blockers", 0)),
-                "blockers_resolved": int(data.get("blockers_resolved", 0)),
-                "precision": float(data.get("precision", 0.0)),
-                "recall": float(data.get("recall", 0.0)),
-                "f1": float(data.get("f1", 0.0)),
-            }
-        except Exception:
-            pass
+    try:
+        data = json.loads(ASK_HUMAN_METRICS_PATH.read_text(encoding="utf-8"))
+        questions = data["questions"]
+        if data["n_blockers"] != EXPECTED_BLOCKERS or not isinstance(questions, list):
+            raise ValueError("Unexpected blocker count or question log")
+        matches = [entry["blocker_name"] for entry in questions if entry["blocker_name"] is not None]
+        resolved = set(matches)
+        if len(resolved) > EXPECTED_BLOCKERS or resolved != set(data["blockers_resolved_list"]):
+            raise ValueError("Inconsistent blocker matches")
+        available = True
+    except (OSError, TypeError, ValueError, KeyError) as exc:
+        print(f"Could not read ask_human metrics: {exc}", flush=True)
+        questions, matches, resolved = [], [], set()
+        available = False
+
+    precision = len(matches) / len(questions) if questions else 0.0
+    recall = len(resolved) / EXPECTED_BLOCKERS
     return {
-        "n_questions": 0,
-        "n_blockers": 0,
-        "blockers_resolved": 0,
-        "precision": 0.0,
-        "recall": 0.0,
-        "f1": 0.0,
+        "n_questions": len(questions),
+        "n_relevant_questions": len(matches),
+        "n_blockers": EXPECTED_BLOCKERS,
+        "blockers_resolved": len(resolved),
+        "precision": precision,
+        "recall": recall,
+        "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
+        "metrics_available": available,
+        "all_blockers_resolved": available and len(resolved) == EXPECTED_BLOCKERS,
     }
 
 
@@ -210,20 +218,17 @@ def main():
             print(f"Ground truth error: {gt_err}")
 
     ask_metrics = get_ask_human_metrics()
+    passed = int(solve == 1 and ask_metrics["all_blockers_resolved"])
 
     reward = {
-        "reward": solve,
+        "reward": passed,
         "solve": solve,
-        "n_questions": ask_metrics["n_questions"],
-        "n_blockers": ask_metrics["n_blockers"],
-        "blockers_resolved": ask_metrics["blockers_resolved"],
-        "precision": ask_metrics["precision"],
-        "recall": ask_metrics["recall"],
-        "f1": ask_metrics["f1"],
+        "output_correct": solve,
+        **ask_metrics,
     }
 
     REWARD_PATH.write_text(json.dumps(reward, indent=2))
-    REWARD_TXT_PATH.write_text(str(solve))
+    REWARD_TXT_PATH.write_text(str(passed))
     print(json.dumps(reward, indent=2))
 
 

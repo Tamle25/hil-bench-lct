@@ -227,7 +227,7 @@ class SQLToolHandler:
             # Multiple SQL agents run concurrently in the same process, so
             # os.environ["TASK_INSTANCE_ID"] gets overwritten by other threads.
             # Use _task_instance_id (set by agent setup) instead.
-            env = os.environ.copy()
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
             if hasattr(self, "_task_instance_id") and self._task_instance_id:
                 env["TASK_INSTANCE_ID"] = self._task_instance_id
                 # Resolve per-instance DATABASE_DESCRIPTIONS_DIR so each task
@@ -246,7 +246,7 @@ class SQLToolHandler:
             process = subprocess.run(
                 full_cmd,
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
                 check=True,  # raise an exception for non-zero exit codes
                 timeout=self.config.execution_timeout,
                 env=env,

@@ -964,6 +964,12 @@ def run_sweagent_batch(
         passes=passes,
         task_type=task_type,
     )
+    ask_modes = {mode for _, mode, enable_ask, _ in model_configs if enable_ask}
+    ask_instance_ids = [
+        instance["instance_id"]
+        for instance in expanded_instances
+        if instance["_mode_name"] in ask_modes
+    ]
 
     # Write expanded instances to temp file
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1106,7 +1112,7 @@ def run_sweagent_batch(
         sweagent_root = str((project_root / "SWE-agent").resolve())
         existing_pythonpath = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = (
-            f"{sweagent_root}:{existing_pythonpath}" if existing_pythonpath else sweagent_root
+            f"{sweagent_root}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else sweagent_root
         )
         if ask_human_server and needs_ask_human:
             # SQL runs locally (no Docker), SWE runs in Docker
@@ -1177,10 +1183,14 @@ def run_sweagent_batch(
                 )
                 return 1, None
             elif chroma_path and Path(chroma_path).exists():
-                env["CHROMA_PATH"] = str(Path(chroma_path).resolve())
+                resolved_chroma_path = Path(chroma_path).resolve()
+                if task_dir is not None and resolved_chroma_path == task_dir / "chroma_db":
+                    env["CHROMA_BASE_PATH"] = str(task_dir.parent)
+                else:
+                    env["CHROMA_PATH"] = str(resolved_chroma_path)
                 env.setdefault("CHROMA_COLLECTION_NAME", "business_info")
                 print(
-                    f"   📁 Using ChromaDB from: {env['CHROMA_PATH']} (collection: {env['CHROMA_COLLECTION_NAME']})"
+                    f"   📁 Using ChromaDB from: {resolved_chroma_path} (collection: {env['CHROMA_COLLECTION_NAME']})"
                 )
             else:
                 chroma_dir = task_dir / "chroma_db" if task_dir is not None else None
@@ -1239,6 +1249,8 @@ def run_sweagent_batch(
                     else:
                         server_kwargs["tasks_dir"] = task_folder
                     ask_human_server = stack.enter_context(start_ask_human_server(**server_kwargs))
+                    # Check the same registries the judge uses before spending model calls.
+                    ask_human_server.get_logs(instance_ids=ask_instance_ids)
 
                 returncode, _ = _run_batch(
                     ask_human_server=ask_human_server,
@@ -1247,7 +1259,7 @@ def run_sweagent_batch(
 
                 # Get logs before ask_human server exits.
                 if ask_human_server:
-                    ask_human_logs = ask_human_server.get_logs()
+                    ask_human_logs = ask_human_server.get_logs(instance_ids=ask_instance_ids)
                     if ask_human_logs:
                         print(f"✅ Retrieved ask_human logs for {len(ask_human_logs)} instances")
                         logs_file = output_dir / "ask_human_logs.json"

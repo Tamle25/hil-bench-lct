@@ -1,0 +1,69 @@
+{
+  "issues": [
+    {
+      "key": "DEMO-101",
+      "fields": {
+        "summary": "Đếm đơn hàng giao trễ theo khu vực",
+        "description": {
+          "type": "doc",
+          "version": 1,
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Lập báo cáo số đơn giao trễ theo khu vực trong kỳ đối soát tuần. Xếp đơn vào kỳ theo thời điểm giao thực tế. Chỉ tính đơn đã hoàn tất."
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Tài liệu nghiệp vụ yêu cầu so với hạn cam kết ban đầu. Checklist vận hành yêu cầu dùng hạn đã điều chỉnh. Đơn giao đúng thời điểm cam kết được xem là đúng hạn."
+                }
+              ]
+            },
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Trả về hai cột "
+                },
+                {
+                  "type": "text",
+                  "text": "region",
+                  "marks": [
+                    {
+                      "type": "code"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "text": " và "
+                },
+                {
+                  "type": "text",
+                  "text": "late_orders",
+                  "marks": [
+                    {
+                      "type": "code"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "text": " cho từng khu vực có ít nhất một đơn giao trễ."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

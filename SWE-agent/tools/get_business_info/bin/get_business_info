@@ -21,7 +21,11 @@ def get_chroma_path():
     task_id = os.environ.get("TASK_INSTANCE_ID")
     if chroma_base and task_id:
         original_id = task_id.split("__")[0]
-        return str(Path(chroma_base) / original_id)
+        task_path = Path(chroma_base) / original_id
+        nested_db = task_path / "chroma_db"
+        if nested_db.is_dir() and not (task_path / "chroma.sqlite3").exists():
+            return str(nested_db)
+        return str(task_path)
     
     raise RuntimeError(
         "Either CHROMA_PATH or (CHROMA_BASE_PATH + TASK_INSTANCE_ID) must be set"

@@ -1,5 +1,8 @@
 sql:
   baseline:
+    openai/gpt-4o: configs/sql/openai_default_sql_config.yaml
+    deepseek/deepseek-flash: configs/sql/default_sql_config.yaml
+    gpt-5.6-luna: configs/sql/default_sql_config.yaml
     openai/gpt-4.1: configs/sql/default_sql_config.yaml
     gpt-5.3-codex: configs/sql/default_sql_config.yaml
     gpt-5.4: configs/sql/default_sql_config.yaml
@@ -8,6 +11,9 @@ sql:
     qwen3-30b-a3b-instruct-2507: configs/sql/default_sql_config.yaml
 
   ask_human:
+    openai/gpt-4o: configs/sql/openai_ask_sql_config.yaml
+    deepseek/deepseek-flash: configs/sql/ask_sql_config_gpt_5-4.yaml
+    gpt-5.6-luna: configs/sql/ask_sql_config_gpt_5-4.yaml
     openai/gpt-4.1: configs/sql/ask_sql_config_gpt_5-4.yaml
     gpt-5.3-codex: configs/sql/ask_sql_config_gpt_5-3_codex.yaml
     gpt-5.4: configs/sql/ask_sql_config_gpt_5-4.yaml
@@ -16,6 +22,9 @@ sql:
     qwen3-30b-a3b-instruct-2507: configs/sql/ask_sql_config_qwen3_30b_a3b_instruct_2507.yaml
 
   full_info:
+    openai/gpt-4o: configs/sql/openai_default_sql_config.yaml
+    deepseek/deepseek-flash: configs/sql/default_sql_config.yaml
+    gpt-5.6-luna: configs/sql/default_sql_config.yaml
     openai/gpt-4.1: configs/sql/default_sql_config.yaml
     gpt-5.3-codex: configs/sql/default_sql_config.yaml
     gpt-5.4: configs/sql/default_sql_config.yaml
@@ -25,6 +34,8 @@ sql:
 
 swe:
   baseline:
+    deepseek/deepseek-flash: configs/swe/default_swe_config.yaml
+    gpt-5.6-luna: configs/swe/default_swe_config.yaml
     openai/gpt-4.1: configs/swe/default_swe_config.yaml
     gpt-5.3-codex: configs/swe/default_swe_config.yaml
     gpt-5.4: configs/swe/default_swe_config.yaml
@@ -33,6 +44,8 @@ swe:
     qwen3-30b-a3b-instruct-2507: configs/swe/default_swe_config.yaml
 
   ask_human:
+    deepseek/deepseek-flash: configs/swe/ask_config_gpt_5-4.yaml
+    gpt-5.6-luna: configs/swe/ask_config_gpt_5-4.yaml
     openai/gpt-4.1: configs/swe/ask_config_gpt_5-4.yaml
     gpt-5.3-codex: configs/swe/ask_config_gpt_5-3_codex.yaml
     gpt-5.4: configs/swe/ask_config_gpt_5-4.yaml
@@ -41,6 +54,8 @@ swe:
     qwen3-30b-a3b-instruct-2507: configs/swe/ask_config_qwen3_30b_a3b_instruct_2507.yaml
 
   full_info:
+    deepseek/deepseek-flash: configs/swe/default_swe_config.yaml
+    gpt-5.6-luna: configs/swe/default_swe_config.yaml
     openai/gpt-4.1: configs/swe/default_swe_config.yaml
     gpt-5.3-codex: configs/swe/default_swe_config.yaml
     gpt-5.4: configs/swe/default_swe_config.yaml

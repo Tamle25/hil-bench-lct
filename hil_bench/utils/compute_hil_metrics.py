@@ -1,84 +1,100 @@
-"""
-Compute HIL-Bench metrics from SWE-agent runs.
-
-Calculates human-in-the-loop specific metrics:
-- Total questions asked via ask_human
-- Number of blockers discovered
-- Ask precision, recall, and F1 scores
-"""
+"""Compute HiL-Bench clarification scores from the ask_human server logs."""
 
 from __future__ import annotations
 
-from typing import TypedDict
-
-from ..ask_human_server import Log
+from typing import Any, TypedDict
 
 
 class GlobalMetrics(TypedDict):
-    instances: dict[str, Log]
+    instances: dict[str, dict[str, Any]]
     precision: float
     recall: float
     ask_f1: float
     n_questions: int
+    n_relevant_questions: int
     n_blockers_present: int
     n_blockers_discovered: int
 
 
-def compute_hil_metrics(
-    logs: dict[str, Log],
-) -> GlobalMetrics:
-    """
-    Compute HIL metrics from server logs.
+def calculate_ask_scores(
+    questions: int, relevant: int, blockers: int, resolved: int
+) -> dict[str, float]:
+    precision = relevant / questions if questions else 0.0
+    recall = resolved / blockers if blockers else 0.0
+    return {
+        "precision": precision,
+        "recall": recall,
+        "ask_f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
+    }
 
-    Args:
-        logs: Dictionary of logs from ask_human_server
 
-    Returns:
-        Dictionary with global metrics and logs with (instance) metrics added
-    """
+def compute_hil_metrics(logs: dict[str, dict[str, Any]]) -> GlobalMetrics:
+    """Score per-attempt logs, including attempts that did not ask any questions."""
+    instances = {}
     total_questions = 0
+    total_relevant_questions = 0
     total_blockers_present = 0
     total_blockers_discovered = 0
-
-    for log_data in logs.values():
-        n_blockers = log_data["n_blockers"]
-        # Support both old "entries" key and new "questions" key for backwards compatibility
+    for instance_id, log_data in logs.items():
+        n_blockers = int(log_data["n_blockers"])
+        # Older logs used "entries" for the raw question records.
         questions = log_data.get("questions") or log_data.get("entries", [])
-
-        n_discovered = len({name for e in questions if (name := e["blocker_name"]) is not None})
+        registered = log_data.get("blockers")
+        matched = [
+            name
+            for question in questions
+            if (name := question.get("blocker_name")) and (not registered or name in registered)
+        ]
         n_questions = len(questions)
-
-        precision = n_discovered / n_questions if n_questions > 0 else 0.0
-        recall = n_discovered / n_blockers if n_blockers > 0 else 0.0
-        ask_f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-
-        log_data["precision"] = precision
-        log_data["recall"] = recall
-        log_data["ask_f1"] = ask_f1
+        n_relevant = len(matched)
+        n_discovered = len(set(matched))
+        instances[instance_id] = {
+            **log_data,
+            **calculate_ask_scores(n_questions, n_relevant, n_blockers, n_discovered),
+            "n_questions": n_questions,
+            "n_relevant_questions": n_relevant,
+            "n_blockers_discovered": n_discovered,
+            "all_blockers_resolved": n_blockers > 0 and n_discovered == n_blockers,
+        }
 
         total_questions += n_questions
+        total_relevant_questions += n_relevant
         total_blockers_present += n_blockers
         total_blockers_discovered += n_discovered
 
-    global_precision = total_blockers_discovered / total_questions if total_questions > 0 else 0.0
-    global_recall = (
-        total_blockers_discovered / total_blockers_present if total_blockers_present > 0 else 0.0
+    scores = calculate_ask_scores(
+        total_questions, total_relevant_questions, total_blockers_present, total_blockers_discovered
     )
-    global_ask_f1 = (
-        2 * (global_precision * global_recall) / (global_precision + global_recall)
-        if (global_precision + global_recall) > 0
-        else 0.0
-    )
-
     return {
-        "instances": logs,
-        "precision": global_precision,
-        "recall": global_recall,
-        "ask_f1": global_ask_f1,
+        "instances": instances,
+        "precision": scores["precision"],
+        "recall": scores["recall"],
+        "ask_f1": scores["ask_f1"],
         "n_questions": total_questions,
+        "n_relevant_questions": total_relevant_questions,
         "n_blockers_present": total_blockers_present,
         "n_blockers_discovered": total_blockers_discovered,
     }
+
+
+def apply_ask_human_gate(metrics: dict[str, Any], hil_metrics: GlobalMetrics) -> None:
+    """Retain verifier correctness and require registered blockers for benchmark pass."""
+    artifact_resolved = metrics.get("artifact_resolved_instances", metrics["resolved_instances"])
+    instances = hil_metrics["instances"]
+    resolved = [
+        instance_id
+        for instance_id in artifact_resolved
+        if instances.get(instance_id, {}).get("all_blockers_resolved")
+    ]
+    total = metrics["total_instances"]
+    metrics.update(
+        artifact_resolved_instances=artifact_resolved,
+        artifact_pass_at_1_count=len(artifact_resolved),
+        artifact_pass_at_1_rate=100 * len(artifact_resolved) / total if total else 0.0,
+        resolved_instances=resolved,
+        pass_at_1_count=len(resolved),
+        pass_at_1_rate=100 * len(resolved) / total if total else 0.0,
+    )
 
 
 def print_hil_metrics_summary(metrics: GlobalMetrics):
@@ -89,6 +105,7 @@ def print_hil_metrics_summary(metrics: GlobalMetrics):
     print("=" * 80)
 
     print(f"# questions asked:\t{metrics['n_questions']}")
+    print(f"# relevant questions:\t{metrics['n_relevant_questions']}")
     print(f"# blockers:\t\t{metrics['n_blockers_present']}")
     print(f"# blockers discovered:\t{metrics['n_blockers_discovered']}")
 

@@ -1,0 +1,5 @@
+model: deepseek/deepseek-flash
+
+hosting:
+  type: litellm_proxy
+  litellm_base_url_env: LITELLM_BASE_URL
